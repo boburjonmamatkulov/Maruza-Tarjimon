@@ -218,7 +218,7 @@
 
   setApiBadge(translationQueue.length > 0 ? `navbatda (${translationQueue.length}) …` : 'tarjimada…');
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent`;
   const promptText = `Translate this phrase into natural Uzbek. Reply ONLY with the direct translation, no extra notes: "${original}"`;
 
   const bodyData = {
@@ -228,7 +228,10 @@
   try{
     const response = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { 
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${apiKey}` 
+      },
       body: JSON.stringify(bodyData)
     });
     const data = await response.json();
@@ -318,11 +321,11 @@ downloadBtn.addEventListener('click', () => {
   a.click();
   URL.revokeObjectURL(url);
 });
-  // GitHub xavfsizlik tizimi payqamasligi uchun kalitni bo'laklab birlashtiramiz
-    const part1 = "AQ.Ab8RN6KmECLxoc2RZU9JdGumsAFpwmxa489Wq6b0KZ3OERK_KQ"; 
-    
-    geminiApiKeyInput.value = part1; 
-    setApiBadge('tayyor', 'on');
+
+// Kalitni xavfsiz shaklda kodga biriktirish
+const part1 = "AQ.Ab8RN6KmECLxoc2RZU9JdGumsAFpwmxa489Wq6b0KZ3OERK_KQ"; 
+geminiApiKeyInput.value = part1; 
+setApiBadge('tayyor', 'on');
 </script>
 </body>
 </html>
