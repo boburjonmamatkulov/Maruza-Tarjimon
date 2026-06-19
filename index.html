@@ -485,18 +485,12 @@ async function translateOne(original, pendingId){
   }
 
   setApiBadge(translationQueue.length > 0 ? `navbatda (${translationQueue.length}) …` : 'tarjima qilinmoqda…');
-  
-  let systemPrompt = "You are a real-time lecture interpreter. Translate the given sentence into natural, fluent Uzbek (Latin script). Output ONLY the translation, nothing else — no notes, no markdown, no quotes, no explanations. If the input is already in Uzbek, lightly clean it up but keep the meaning. Preserve technical/academic terms appropriately.";
-  if(glossaryTerms.length > 0){
-    systemPrompt += " The following terms must NEVER be translated or altered — keep them exactly as written: " + glossaryTerms.join(', ') + ".";
-  }
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
-  
+  const promptText = `Translate this text into natural Uzbek language. Output only the translation, no explanations: "${original}"`;
+
   const bodyData = {
-    contents: [
-      { role: "user", parts: [{ text: systemPrompt + "\n\nContext:\n" + contextHistory.join("\n") + "\n\nTranslate this target line now:\n" + original }] }
-    ]
+    contents: [{ parts: [{ text: promptText }] }]
   };
 
   try{
@@ -519,8 +513,6 @@ async function translateOne(original, pendingId){
       el.querySelector('p').textContent = translated;
     }
     fullLog.push({time: timeNow(), original, translated});
-    contextHistory.push(original + " -> " + translated);
-    if(contextHistory.length > 6) contextHistory.shift();
     setApiBadge(translationQueue.length > 0 ? `navbatda (${translationQueue.length}) …` : 'tayyor', 'on');
   } catch(err){
     const el = document.getElementById(pendingId);
