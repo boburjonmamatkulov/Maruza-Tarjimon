@@ -208,111 +208,116 @@
     }
 
     async function translateOne(original, pendingId){
-      const apiKey = geminiApiKeyInput.value.trim();
-      if(!apiKey) {
-        const el = document.getElementById(pendingId);
-        if(el) el.querySelector('p').textContent = '(API Kalit kiritilmagan!)';
-        setApiBadge('kalit yo\'q', 'err');
-        return;
+  const apiKey = geminiApiKeyInput.value.trim();
+  if(!apiKey) {
+    const el = document.getElementById(pendingId);
+    if(el) el.querySelector('p').textContent = '(API Kalit kiritilmagan!)';
+    setApiBadge('kalit yo\'q', 'err');
+    return;
+  }
+
+  setApiBadge(translationQueue.length > 0 ? `navbatda (${translationQueue.length}) …` : 'tarjimada…');
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+  const promptText = `Translate this phrase into natural Uzbek. Reply ONLY with the direct translation, no extra notes: "${original}"`;
+
+  const bodyData = {
+    contents: [{ parts: [{ text: promptText }] }]
+  };
+
+  try{
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(bodyData)
+    });
+    const data = await response.json();
+    
+    if (data.error) {
+      const el = document.getElementById(pendingId);
+      if(el) {
+        el.classList.remove('pending');
+        el.querySelector('p').textContent = `Google Xatosi: ${data.error.message} (Kod: ${data.error.code})`;
       }
-
-      setApiBadge(translationQueue.length > 0 ? `navbatda (${translationQueue.length}) …` : 'tarjimada…');
-
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
-      const promptText = `Translate this phrase into natural Uzbek. Reply ONLY with the direct translation, no extra notes: "${original}"`;
-
-      const bodyData = {
-        contents: [{ parts: [{ text: promptText }] }]
-      };
-
-      try{
-        const response = await fetch(url, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(bodyData)
-        });
-        const data = await response.json();
-        
-        let translated = '';
-        if(data && data.candidates && data.candidates[0].content.parts[0].text){
-          translated = data.candidates[0].content.parts[0].text.trim();
-        }
-        if(!translated){ translated = '(tarjima topilmadi)'; }
-
-        const el = document.getElementById(pendingId);
-        if(el){
-          el.classList.remove('pending');
-          el.querySelector('p').textContent = translated;
-        }
-        fullLog.push({time: timeNow(), original, translated});
-        setApiBadge(translationQueue.length > 0 ? `navbatda (${translationQueue.length}) …` : 'tayyor', 'on');
-      } catch(err){
-        const el = document.getElementById(pendingId);
-        if(el){
-          el.classList.remove('pending');
-          el.querySelector('p').textContent = '(tarjima xatosi)';
-        }
-        setApiBadge('xatolik', 'err');
-      }
+      setApiBadge('Google xatosi', 'err');
+      return;
     }
 
-    // DOIMIYLIK: API kalit avtomatik yoziladi va faollashadi
-    geminiApiKeyInput.value = "AQ.Ab8RN6IALWseyaYg5-6evfNDUH_3x-WOT0B6Ac7v0Md72b0UwQ"; 
-    setApiBadge('tayyor', 'on');
-
-    function startListening(){
-      recognition = buildRecognition();
-      if(!recognition) return;
-      listening = true;
-      toggleBtn.classList.add('recording');
-      toggleBtn.textContent = 'To\'xtatish';
-      try{ recognition.start(); }catch(err){ listening = false; }
+    let translated = '';
+    if(data && data.candidates && data.candidates[0].content.parts[0].text){
+      translated = data.candidates[0].content.parts[0].text.trim();
     }
+    if(!translated){ translated = '(tarjima topilmadi - format xatosi)'; }
 
-    function stopListening(){
-      listening = false;
-      toggleBtn.classList.remove('recording');
-      toggleBtn.textContent = 'Tinglashni boshlash';
-      clearInterim();
-      if(recognition){ try{ recognition.stop(); }catch(err){} }
+    const el = document.getElementById(pendingId);
+    if(el){
+      el.classList.remove('pending');
+      el.querySelector('p').textContent = translated;
     }
+    fullLog.push({time: timeNow(), original, translated});
+    setApiBadge(translationQueue.length > 0 ? `navbatda (${translationQueue.length}) …` : 'tayyor', 'on');
+  } catch(err){
+    const el = document.getElementById(pendingId);
+    if(el){
+      el.classList.remove('pending');
+      el.querySelector('p').textContent = `Ulanish xatosi: ${err.message}`;
+    }
+    setApiBadge('xatolik', 'err');
+  }
+}
 
-    toggleBtn.addEventListener('click', () => {
-      if(listening){ stopListening(); } else { startListening(); }
-    });
+function startListening(){
+  recognition = buildRecognition();
+  listening = true;
+  toggleBtn.classList.add('recording');
+  toggleBtn.textContent = 'To\'xtatish';
+  try{ recognition.start(); }catch(err){ listening = false; }
+}
 
-    langSelect.addEventListener('change', () => {
-      if(listening){
-        listening = false;
-        if(recognition){ try{ recognition.stop(); }catch(e){} }
-        setTimeout(() => { startListening(); }, 250);
-      }
-    });
+function stopListening(){
+  listening = false;
+  toggleBtn.classList.remove('recording');
+  toggleBtn.textContent = 'Tinglashni boshlash';
+  clearInterim();
+  if(recognition){ try{ recognition.stop(); }catch(err){} }
+}
 
-    clearBtn.addEventListener('click', () => {
-      originalPane.innerHTML = '<h2>Asl matn</h2><div class="empty-hint" id="originalHint">Ma\'ruzachi gapira boshlaganda...</div>';
-      translatedPane.innerHTML = '<h2>O\'zbekcha tarjima</h2><div class="empty-hint" id="translatedHint">Tarjima...</div>';
-      fullLog = []; translationQueue = [];
-    });
+toggleBtn.addEventListener('click', () => {
+  if(listening){ stopListening(); } else { startListening(); }
+});
 
-    copyBtn.addEventListener('click', () => {
-      const text = fullLog.map(e => `[${e.time}]\nAsl: ${e.original}\nTarjima: ${e.translated}\n`).join('\n');
-      navigator.clipboard.writeText(text || 'Bo\'sh').then(() => {
-        copyBtn.textContent = 'Nusxalandi ✓';
-        setTimeout(() => copyBtn.textContent = 'Matnni nusxalash', 1500);
-      });
-    });
+langSelect.addEventListener('change', () => {
+  if(listening){
+    listening = false;
+    if(recognition){ try{ recognition.stop(); }catch(e){} }
+    setTimeout(() => { startListening(); }, 250);
+  }
+});
 
-    downloadBtn.addEventListener('click', () => {
-      const text = fullLog.map(e => `[${e.time}]\nAsl: ${e.original}\nTarjima: ${e.translated}\n`).join('\n');
-      const blob = new Blob([text || 'Bo\'sh.'], {type: 'text/plain;charset=utf-8'});
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `konspekt-${new Date().toISOString().slice(0,10)}.txt`;
-      a.click();
-      URL.revokeObjectURL(url);
-    });
-  </script>
+clearBtn.addEventListener('click', () => {
+  originalPane.innerHTML = '<h2>Asl matn</h2><div class="empty-hint" id="originalHint">Ma\'ruzachi gapira boshlaganda...</div>';
+  translatedPane.innerHTML = '<h2>O\'zbekcha tarjima</h2><div class="empty-hint" id="translatedHint">Tarjima...</div>';
+  fullLog = []; translationQueue = [];
+});
+
+copyBtn.addEventListener('click', () => {
+  const text = fullLog.map(e => `[${e.time}]\nAsl: ${e.original}\nTarjima: ${e.translated}\n`).join('\n');
+  navigator.clipboard.writeText(text || 'Bo\'sh').then(() => {
+    copyBtn.textContent = 'Nusxalandi ✓';
+    setTimeout(() => copyBtn.textContent = 'Matnni nusxalash', 1500);
+  });
+});
+
+downloadBtn.addEventListener('click', () => {
+  const text = fullLog.map(e => `[${e.time}]\nAsl: ${e.original}\nTarjima: ${e.translated}\n`).join('\n');
+  const blob = new Blob([text || 'Bo\'sh.'], {type: 'text/plain;charset=utf-8'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `konspekt-${new Date().toISOString().slice(0,10)}.txt`;
+  a.click();
+  URL.revokeObjectURL(url);
+});
+</script>
 </body>
 </html>
