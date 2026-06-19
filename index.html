@@ -264,6 +264,7 @@ if (localStorage.getItem('gemini_key')) {
   geminiApiKeyInput.value = localStorage.getItem('gemini_key');
   setApiBadge('tayyor', 'on');
 }
+  geminiApiKeyInput.value = "AQ.Ab8RN6IALWseyaYg5-6evfNDUH_3x-WOT0B6Ac7v0Md72b0UwQ"; setApiBadge('tayyor', 'on');
 
 geminiApiKeyInput.addEventListener('input', (e) => {
   localStorage.setItem('gemini_key', e.target.value.trim());
