@@ -406,13 +406,40 @@ function buildRecognition(){
 
 // ---- Settle logic: Android keeps revising the "final" result for ~1-2s.
 // We wait for it to stop changing before translating, instead of reacting to every flicker. ----
-const SETTLE_DELAY_MS = 900;     // how long the text must stay unchanged before we translate it
+const SETTLE_DELAY_MS = 900;        // how long the text must stay unchanged before we translate it
 const SAME_UTTERANCE_GAP_MS = 2500; // if a new "final" arrives within this gap, treat it as a revision, not a new sentence
+const ECHO_WINDOW_MS = 30000;       // Android sometimes re-emits the same sentence up to ~30s later — catch that too
 
 let settleTimer = null;
 let pendingEntryId = null;
 let pendingRawText = '';
 let lastFinalAt = 0;
+let lastCommittedEntryId = null;
+let lastCommittedText = '';
+let lastCommittedAt = 0;
+
+function normalizeText(s){
+  return s.trim().toLowerCase().replace(/[.,!?;:]/g, '').replace(/\s+/g, ' ');
+}
+function wordsOf(s){
+  return s.trim().split(/\s+/).filter(Boolean);
+}
+// True if `newText` is the same sentence as `prevText` re-emitted, or an extended version of it
+// (Android occasionally repeats/grows a "final" result well after it first looked complete).
+function isDuplicateOrExtension(prevText, newText){
+  if(!prevText) return false;
+  const a = normalizeText(prevText);
+  const b = normalizeText(newText);
+  if(a === b) return true;
+  const prevWords = wordsOf(a);
+  const newWords = wordsOf(b);
+  const minLen = Math.min(prevWords.length, newWords.length);
+  if(minLen < 4) return false; // too short to judge reliably, avoid false positives
+  for(let i = 0; i < minLen; i++){
+    if(prevWords[i] !== newWords[i]) return false;
+  }
+  return true; // one is a leading match of the other for at least 4 words
+}
 
 function handleFinalChunk(text){
   const now = Date.now();
@@ -422,7 +449,18 @@ function handleFinalChunk(text){
     updateOriginalEntry(pendingEntryId, text);
   } else {
     flushPending(); // commit whatever was pending immediately, a new sentence has begun
-    pendingEntryId = addEntry(text);
+
+    const isDelayedEcho = lastCommittedEntryId && (now - lastCommittedAt) < ECHO_WINDOW_MS
+      && isDuplicateOrExtension(lastCommittedText, text);
+
+    if(isDelayedEcho){
+      // Re-use the previous line instead of creating a duplicate — just update & re-translate it.
+      pendingEntryId = lastCommittedEntryId;
+      updateOriginalEntry(pendingEntryId, text);
+      markEntryPending(pendingEntryId);
+    } else {
+      pendingEntryId = addEntry(text);
+    }
   }
   pendingRawText = text;
   lastFinalAt = now;
@@ -434,6 +472,9 @@ function flushPending(){
   clearTimeout(settleTimer);
   if(pendingEntryId && pendingRawText){
     enqueueTranslation(pendingRawText, pendingEntryId);
+    lastCommittedEntryId = pendingEntryId;
+    lastCommittedText = pendingRawText;
+    lastCommittedAt = Date.now();
   }
   pendingEntryId = null;
   pendingRawText = '';
@@ -442,6 +483,15 @@ function flushPending(){
 function updateOriginalEntry(id, text){
   const el = id ? document.getElementById(id) : null;
   if(el){ el.querySelector('.orig-text').textContent = text; }
+}
+
+function markEntryPending(id){
+  const el = id ? document.getElementById(id) : null;
+  if(el){
+    const t = el.querySelector('.trans-text');
+    t.classList.add('pending');
+    t.textContent = 'tarjima qilinmoqda…';
+  }
 }
 
 function clearInterim(){
@@ -562,6 +612,8 @@ function startListening(){
   clearTimeout(settleTimer);
   pendingEntryId = null;
   pendingRawText = '';
+  lastCommittedEntryId = null;
+  lastCommittedText = '';
   toggleBtn.classList.add('recording');
   toggleLabel.textContent = 'Tinglashni to\'xtatish';
   try{
@@ -606,6 +658,8 @@ clearBtn.addEventListener('click', () => {
   clearTimeout(settleTimer);
   pendingEntryId = null;
   pendingRawText = '';
+  lastCommittedEntryId = null;
+  lastCommittedText = '';
 });
 
 function buildTranscriptText(){
