@@ -94,40 +94,42 @@
   .status-line .badge.on{ color: var(--good); border-color: var(--good); }
   .status-line .badge.err{ color: var(--rec); border-color: var(--rec); }
 
-  .panes{
-    display:grid; grid-template-columns: 1fr 1fr; gap: 18px;
-  }
-  @media (max-width: 720px){ .panes{ grid-template-columns: 1fr; } }
-
-  .pane{
+  .transcript-pane{
     background: var(--bg-panel);
     border: 1px solid var(--rule);
     border-radius: 12px;
-    padding: 18px 18px 8px;
+    padding: 6px 20px 8px;
     min-height: 420px;
-    max-height: 560px;
+    max-height: 68vh;
     overflow-y: auto;
-    display:flex; flex-direction:column; gap: 14px;
   }
-  .pane h2{
+  .transcript-pane h2{
     font-family:'IBM Plex Mono', monospace; font-size: 11px; letter-spacing:1.5px;
-    text-transform:uppercase; color: var(--chalk-dim); margin: 0 0 4px;
-    position: sticky; top: 0; background: var(--bg-panel); padding-bottom:6px;
+    text-transform:uppercase; color: var(--chalk-dim); margin: 0;
+    position: sticky; top: 0; background: var(--bg-panel); padding: 14px 0 10px;
     border-bottom: 1px solid var(--rule);
   }
-  .entry{ animation: rise 0.25s ease; }
-  @keyframes rise{ from{opacity:0; transform: translateY(4px);} to{opacity:1; transform:none;} }
-  .entry .meta{
-    font-family:'IBM Plex Mono', monospace; font-size: 10.5px; color: var(--gold-dim);
-    margin-bottom: 3px;
+  .lecture-entry{
+    padding: 14px 0; border-bottom: 1px dashed var(--rule); animation: rise 0.25s ease;
   }
-  .entry.original p{ font-family:'Source Serif 4', serif; font-size: 16px; line-height:1.5; margin:0; color: var(--chalk); }
-  .entry.translated p{ font-size: 15px; line-height:1.55; margin:0; color: var(--chalk); }
-  .entry.translated.pending p{ color: var(--chalk-dim); font-style: italic; }
-  .interim{ color: var(--chalk-dim); font-style: italic; font-family:'Source Serif 4', serif; font-size:16px; }
+  .lecture-entry:last-child{ border-bottom: none; }
+  @keyframes rise{ from{opacity:0; transform: translateY(4px);} to{opacity:1; transform:none;} }
+  .lecture-entry .meta{
+    font-family:'IBM Plex Mono', monospace; font-size: 10.5px; color: var(--gold-dim);
+    margin-bottom: 5px;
+  }
+  .lecture-entry .orig-text{
+    font-family:'Source Serif 4', serif; font-style: italic; font-size: 15px;
+    line-height:1.5; margin: 0 0 6px; color: var(--chalk-dim);
+  }
+  .lecture-entry .trans-text{
+    font-size: 16.5px; font-weight: 500; line-height:1.55; margin:0; color: var(--chalk);
+  }
+  .lecture-entry .trans-text.pending{ color: var(--chalk-dim); font-style: italic; font-weight:400; }
+  .interim{ color: var(--chalk-dim); font-style: italic; font-family:'Source Serif 4', serif; font-size:15px; padding: 4px 0; }
 
   .empty-hint{
-    color: var(--chalk-dim); font-size: 13.5px; line-height:1.6; margin-top: 6px;
+    color: var(--chalk-dim); font-size: 13.5px; line-height:1.6; margin: 14px 0;
   }
 
   .toolbar{
@@ -199,15 +201,9 @@
     </div>
   </div>
 
-  <div class="panes">
-    <div class="pane" id="originalPane">
-      <h2>Asl matn</h2>
-      <div class="empty-hint" id="originalHint">Ma'ruzachi gapira boshlaganda, matn shu yerda paydo bo'ladi. Til almashganda, yuqoridagi ro'yxatdan tilni o'zgartiring.</div>
-    </div>
-    <div class="pane" id="translatedPane">
-      <h2>O'zbekcha tarjima</h2>
-      <div class="empty-hint" id="translatedHint">Tarjima shu yerda ko'rinadi.</div>
-    </div>
+  <div class="transcript-pane" id="transcriptPane">
+    <h2>Jonli konspekt</h2>
+    <div class="empty-hint" id="emptyHint">Ma'ruzachi gapira boshlaganda, har gap va uning tarjimasi shu yerda, ketma-ket paydo bo'ladi. Til almashganda, yuqoridagi ro'yxatdan tilni o'zgartiring.</div>
   </div>
 
   <div class="toolbar">
@@ -241,10 +237,8 @@ const toggleLabel = document.getElementById('toggleLabel');
 const langSelect = document.getElementById('langSelect');
 const micBadge = document.getElementById('micBadge');
 const apiBadge = document.getElementById('apiBadge');
-const originalPane = document.getElementById('originalPane');
-const translatedPane = document.getElementById('translatedPane');
-const originalHint = document.getElementById('originalHint');
-const translatedHint = document.getElementById('translatedHint');
+const transcriptPane = document.getElementById('transcriptPane');
+const emptyHint = document.getElementById('emptyHint');
 const meterBars = document.querySelectorAll('#meter span');
 const clearBtn = document.getElementById('clearBtn');
 const copyBtn = document.getElementById('copyBtn');
@@ -416,21 +410,19 @@ const SETTLE_DELAY_MS = 900;     // how long the text must stay unchanged before
 const SAME_UTTERANCE_GAP_MS = 2500; // if a new "final" arrives within this gap, treat it as a revision, not a new sentence
 
 let settleTimer = null;
-let pendingOriginalId = null;
-let pendingTranslatedId = null;
+let pendingEntryId = null;
 let pendingRawText = '';
 let lastFinalAt = 0;
 
 function handleFinalChunk(text){
   const now = Date.now();
-  const isRevision = pendingOriginalId && (now - lastFinalAt) < SAME_UTTERANCE_GAP_MS;
+  const isRevision = pendingEntryId && (now - lastFinalAt) < SAME_UTTERANCE_GAP_MS;
 
   if(isRevision){
-    updateOriginalEntry(pendingOriginalId, text);
+    updateOriginalEntry(pendingEntryId, text);
   } else {
     flushPending(); // commit whatever was pending immediately, a new sentence has begun
-    pendingOriginalId = addOriginalEntry(text);
-    pendingTranslatedId = addTranslatedPending(text);
+    pendingEntryId = addEntry(text);
   }
   pendingRawText = text;
   lastFinalAt = now;
@@ -440,17 +432,16 @@ function handleFinalChunk(text){
 
 function flushPending(){
   clearTimeout(settleTimer);
-  if(pendingOriginalId && pendingTranslatedId && pendingRawText){
-    enqueueTranslation(pendingRawText, pendingTranslatedId);
+  if(pendingEntryId && pendingRawText){
+    enqueueTranslation(pendingRawText, pendingEntryId);
   }
-  pendingOriginalId = null;
-  pendingTranslatedId = null;
+  pendingEntryId = null;
   pendingRawText = '';
 }
 
 function updateOriginalEntry(id, text){
   const el = id ? document.getElementById(id) : null;
-  if(el){ el.querySelector('p').textContent = text; }
+  if(el){ el.querySelector('.orig-text').textContent = text; }
 }
 
 function clearInterim(){
@@ -458,40 +449,27 @@ function clearInterim(){
 }
 
 function showInterim(text){
-  if(originalHint) originalHint.remove();
+  if(emptyHint) emptyHint.remove();
   if(!interimEl){
     interimEl = document.createElement('div');
     interimEl.className = 'interim';
-    originalPane.appendChild(interimEl);
+    transcriptPane.appendChild(interimEl);
   }
   interimEl.textContent = text;
-  originalPane.scrollTop = originalPane.scrollHeight;
+  transcriptPane.scrollTop = transcriptPane.scrollHeight;
 }
 
-function addOriginalEntry(text){
-  if(originalHint) { originalHint.remove(); }
+function addEntry(text){
+  if(emptyHint){ emptyHint.remove(); }
   clearInterim();
   entryCount++;
-  const id = 'o' + entryCount;
+  const id = 'e' + entryCount;
   const wrap = document.createElement('div');
-  wrap.className = 'entry original';
+  wrap.className = 'lecture-entry';
   wrap.id = id;
-  wrap.innerHTML = `<div class="meta">${timeNow()}</div><p>${escapeHtml(text)}</p>`;
-  originalPane.appendChild(wrap);
-  originalPane.scrollTop = originalPane.scrollHeight;
-  return id;
-}
-
-function addTranslatedPending(text){
-  if(translatedHint){ translatedHint.remove(); }
-  entryCount++;
-  const id = 'tr-pending-' + entryCount;
-  const wrap = document.createElement('div');
-  wrap.className = 'entry translated pending';
-  wrap.id = id;
-  wrap.innerHTML = `<div class="meta">${timeNow()}</div><p>tarjima qilinmoqda…</p>`;
-  translatedPane.appendChild(wrap);
-  translatedPane.scrollTop = translatedPane.scrollHeight;
+  wrap.innerHTML = `<div class="meta">${timeNow()}</div><p class="orig-text">${escapeHtml(text)}</p><p class="trans-text pending">tarjima qilinmoqda…</p>`;
+  transcriptPane.appendChild(wrap);
+  transcriptPane.scrollTop = transcriptPane.scrollHeight;
   return id;
 }
 
@@ -554,16 +532,18 @@ async function translateOne(original, targetId){
 
     const el = document.getElementById(targetId);
     if(el){
-      el.classList.remove('pending');
-      el.querySelector('p').textContent = translated;
-      translatedPane.scrollTop = translatedPane.scrollHeight;
+      const transEl = el.querySelector('.trans-text');
+      transEl.classList.remove('pending');
+      transEl.textContent = translated;
+      transcriptPane.scrollTop = transcriptPane.scrollHeight;
     }
     setApiBadge(translationQueue.length > 0 ? `navbatda (${translationQueue.length}) …` : 'tayyor', translationQueue.length > 0 ? '' : 'on');
   } catch(err){
     const el = document.getElementById(targetId);
     if(el){
-      el.classList.remove('pending');
-      el.querySelector('p').textContent = '(tarjima xatosi — qaytadan urinib ko\'ring)';
+      const transEl = el.querySelector('.trans-text');
+      transEl.classList.remove('pending');
+      transEl.textContent = '(tarjima xatosi — qaytadan urinib ko\'ring)';
     }
     setApiBadge('xatolik yuz berdi', 'err');
   }
@@ -573,8 +553,7 @@ function startListening(){
   recognition = buildRecognition();
   listening = true;
   clearTimeout(settleTimer);
-  pendingOriginalId = null;
-  pendingTranslatedId = null;
+  pendingEntryId = null;
   pendingRawText = '';
   toggleBtn.classList.add('recording');
   toggleLabel.textContent = 'Tinglashni to\'xtatish';
@@ -614,29 +593,24 @@ langSelect.addEventListener('change', () => {
 });
 
 clearBtn.addEventListener('click', () => {
-  originalPane.innerHTML = '<h2>Asl matn</h2><div class="empty-hint" id="originalHint">Ma\'ruzachi gapira boshlaganda, matn shu yerda paydo bo\'ladi.</div>';
-  translatedPane.innerHTML = '<h2>O\'zbekcha tarjima</h2><div class="empty-hint" id="translatedHint">Tarjima shu yerda ko\'rinadi.</div>';
+  transcriptPane.innerHTML = '<h2>Jonli konspekt</h2><div class="empty-hint" id="emptyHint">Ma\'ruzachi gapira boshlaganda, har gap va uning tarjimasi shu yerda, ketma-ket paydo bo\'ladi.</div>';
   entryCount = 0;
   translationQueue = [];
   clearTimeout(settleTimer);
-  pendingOriginalId = null;
-  pendingTranslatedId = null;
+  pendingEntryId = null;
   pendingRawText = '';
 });
 
 function buildTranscriptText(){
-  const origEntries = Array.from(originalPane.querySelectorAll('.entry.original'));
-  const transEntries = Array.from(translatedPane.querySelectorAll('.entry.translated'));
-  const len = Math.max(origEntries.length, transEntries.length);
-  const lines = [];
-  for(let i = 0; i < len; i++){
-    const o = origEntries[i];
-    const t = transEntries[i];
-    const time = (o && o.querySelector('.meta')) ? o.querySelector('.meta').textContent : ((t && t.querySelector('.meta')) ? t.querySelector('.meta').textContent : '');
-    const origText = o ? o.querySelector('p').textContent : '';
-    const transText = t ? t.querySelector('p').textContent : '';
-    lines.push(`[${time}]\nAsl: ${origText}\nTarjima: ${transText}\n`);
-  }
+  // Reads ONLY the .lecture-entry blocks (time + original + translation) —
+  // never the buttons, glossary panel, or note text around them.
+  const entries = Array.from(transcriptPane.querySelectorAll('.lecture-entry'));
+  const lines = entries.map(entry => {
+    const time = entry.querySelector('.meta') ? entry.querySelector('.meta').textContent : '';
+    const origText = entry.querySelector('.orig-text') ? entry.querySelector('.orig-text').textContent : '';
+    const transText = entry.querySelector('.trans-text') ? entry.querySelector('.trans-text').textContent : '';
+    return `[${time}]\nAsl: ${origText}\nTarjima: ${transText}\n`;
+  });
   return lines.join('\n');
 }
 
