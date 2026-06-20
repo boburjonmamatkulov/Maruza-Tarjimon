@@ -254,8 +254,10 @@ let recognition = null;
 let listening = false;
 let interimEl = null;
 let entryCount = 0;
-let fullLog = []; // {time, original, translated}
 let restartTimer = null;
+let lastFinalText = '';
+let lastOriginalEntryId = null;
+let lastTranslatedEntryId = null;
 
 // ---- Glossary (terms that should never be translated) ----
 const glossInput = document.getElementById('glossInput');
@@ -373,6 +375,10 @@ function buildRecognition(){
     if(listening){
       // Browser stops recognition after pauses/timeouts even in continuous mode.
       // Restart immediately and silently so the person never has to click again.
+      // Whatever comes next is a fresh utterance, not a continuation of the last one.
+      lastFinalText = '';
+      lastOriginalEntryId = null;
+      lastTranslatedEntryId = null;
       clearTimeout(restartTimer);
       restartTimer = setTimeout(() => {
         if(!listening) return;
@@ -394,9 +400,24 @@ function buildRecognition(){
       const text = result[0].transcript.trim();
       if(result.isFinal){
         if(text.length > 0){
-          addOriginalEntry(text);
-          const pendingId = addTranslatedPending(text);
-          enqueueTranslation(text, pendingId);
+          if(isContinuation(lastFinalText, text)){
+            // Android sometimes re-fires the SAME utterance, just grown longer.
+            // Update the existing line in place and translate only the new words.
+            const prevWordCount = wordsOf(lastFinalText).length;
+            const diffText = wordsOf(text).slice(prevWordCount).join(' ');
+            updateOriginalEntry(lastOriginalEntryId, text);
+            lastFinalText = text;
+            if(diffText){
+              enqueueTranslation(diffText, lastTranslatedEntryId, true);
+            }
+          } else {
+            const oId = addOriginalEntry(text);
+            const pendingId = addTranslatedPending(text);
+            lastFinalText = text;
+            lastOriginalEntryId = oId;
+            lastTranslatedEntryId = pendingId;
+            enqueueTranslation(text, pendingId, false);
+          }
         }
         clearInterim();
       } else {
@@ -409,6 +430,26 @@ function buildRecognition(){
   };
 
   return rec;
+}
+
+function wordsOf(s){
+  return s.trim().split(/\s+/).filter(Boolean);
+}
+
+function isContinuation(prevText, newText){
+  if(!prevText) return false;
+  const prevWords = wordsOf(prevText.toLowerCase());
+  const newWords = wordsOf(newText.toLowerCase());
+  if(newWords.length <= prevWords.length) return false;
+  for(let i = 0; i < prevWords.length; i++){
+    if(prevWords[i] !== newWords[i]) return false;
+  }
+  return true;
+}
+
+function updateOriginalEntry(id, text){
+  const el = id ? document.getElementById(id) : null;
+  if(el){ el.querySelector('p').textContent = text; }
 }
 
 function clearInterim(){
@@ -459,12 +500,12 @@ function escapeHtml(str){
   return div.innerHTML;
 }
 
-// ---- Translation queue (keeps order) ----
+// ---- Translation queue (keeps order; supports appending diff-text to an existing line) ----
 let translationQueue = [];
 let isProcessingQueue = false;
 
-function enqueueTranslation(original, pendingId){
-  translationQueue.push({ original, pendingId });
+function enqueueTranslation(original, targetId, isAppend){
+  translationQueue.push({ original, targetId, isAppend: !!isAppend });
   processQueue();
 }
 
@@ -473,7 +514,7 @@ async function processQueue(){
   isProcessingQueue = true;
   while(translationQueue.length > 0){
     const job = translationQueue.shift();
-    await translateOne(job.original, job.pendingId);
+    await translateOne(job.original, job.targetId, job.isAppend);
   }
   isProcessingQueue = false;
 }
@@ -482,7 +523,7 @@ function escapeRegExp(str){
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-async function translateOne(original, pendingId){
+async function translateOne(original, targetId, isAppend){
   setApiBadge(translationQueue.length > 0 ? `navbatda (${translationQueue.length}) …` : 'tarjima qilinmoqda…');
 
   // Protect glossary terms: swap them for plain tokens the translator won't touch, then restore after.
@@ -503,34 +544,42 @@ async function translateOne(original, pendingId){
     const data = await response.json();
     let translated = (data && data[0]) ? data[0].map(seg => seg[0]).join('') : '';
     translated = translated.trim();
-    if(!translated){ translated = '(tarjima topilmadi)'; }
+    if(!translated){ translated = isAppend ? '' : '(tarjima topilmadi)'; }
 
     placeholders.forEach(p => {
       const re = new RegExp(p.token, 'gi');
       translated = translated.replace(re, p.term);
     });
 
-    const el = document.getElementById(pendingId);
+    const el = document.getElementById(targetId);
     if(el){
+      const p = el.querySelector('p');
       el.classList.remove('pending');
-      el.querySelector('p').textContent = translated;
+      if(isAppend && translated){
+        const current = (p.textContent === 'tarjima qilinmoqda…') ? '' : p.textContent;
+        p.textContent = current ? (current + ' ' + translated) : translated;
+      } else if(!isAppend){
+        p.textContent = translated;
+      }
+      translatedPane.scrollTop = translatedPane.scrollHeight;
     }
-    fullLog.push({time: timeNow(), original, translated});
     setApiBadge(translationQueue.length > 0 ? `navbatda (${translationQueue.length}) …` : 'tayyor', translationQueue.length > 0 ? '' : 'on');
   } catch(err){
-    const el = document.getElementById(pendingId);
-    if(el){
+    const el = document.getElementById(targetId);
+    if(el && !isAppend){
       el.classList.remove('pending');
       el.querySelector('p').textContent = '(tarjima xatosi — qaytadan urinib ko\'ring)';
     }
     setApiBadge('xatolik yuz berdi', 'err');
-    fullLog.push({time: timeNow(), original, translated: '(xato)'});
   }
 }
 
 function startListening(){
   recognition = buildRecognition();
   listening = true;
+  lastFinalText = '';
+  lastOriginalEntryId = null;
+  lastTranslatedEntryId = null;
   toggleBtn.classList.add('recording');
   toggleLabel.textContent = 'Tinglashni to\'xtatish';
   try{
@@ -570,13 +619,31 @@ langSelect.addEventListener('change', () => {
 clearBtn.addEventListener('click', () => {
   originalPane.innerHTML = '<h2>Asl matn</h2><div class="empty-hint" id="originalHint">Ma\'ruzachi gapira boshlaganda, matn shu yerda paydo bo\'ladi.</div>';
   translatedPane.innerHTML = '<h2>O\'zbekcha tarjima</h2><div class="empty-hint" id="translatedHint">Tarjima shu yerda ko\'rinadi.</div>';
-  fullLog = [];
   entryCount = 0;
   translationQueue = [];
+  lastFinalText = '';
+  lastOriginalEntryId = null;
+  lastTranslatedEntryId = null;
 });
 
+function buildTranscriptText(){
+  const origEntries = Array.from(originalPane.querySelectorAll('.entry.original'));
+  const transEntries = Array.from(translatedPane.querySelectorAll('.entry.translated'));
+  const len = Math.max(origEntries.length, transEntries.length);
+  const lines = [];
+  for(let i = 0; i < len; i++){
+    const o = origEntries[i];
+    const t = transEntries[i];
+    const time = (o && o.querySelector('.meta')) ? o.querySelector('.meta').textContent : ((t && t.querySelector('.meta')) ? t.querySelector('.meta').textContent : '');
+    const origText = o ? o.querySelector('p').textContent : '';
+    const transText = t ? t.querySelector('p').textContent : '';
+    lines.push(`[${time}]\nAsl: ${origText}\nTarjima: ${transText}\n`);
+  }
+  return lines.join('\n');
+}
+
 copyBtn.addEventListener('click', () => {
-  const text = fullLog.map(e => `[${e.time}]\nAsl: ${e.original}\nTarjima: ${e.translated}\n`).join('\n');
+  const text = buildTranscriptText();
   navigator.clipboard.writeText(text || '(hozircha matn yo\'q)').then(() => {
     copyBtn.textContent = 'Nusxalandi ✓';
     setTimeout(() => copyBtn.textContent = 'Matnni nusxalash', 1500);
@@ -584,7 +651,7 @@ copyBtn.addEventListener('click', () => {
 });
 
 downloadBtn.addEventListener('click', () => {
-  const text = fullLog.map(e => `[${e.time}]\nAsl: ${e.original}\nTarjima: ${e.translated}\n`).join('\n');
+  const text = buildTranscriptText();
   const blob = new Blob([text || 'Hozircha matn yo\'q.'], {type: 'text/plain;charset=utf-8'});
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
