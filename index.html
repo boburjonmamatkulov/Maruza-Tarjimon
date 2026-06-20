@@ -255,9 +255,6 @@ let listening = false;
 let interimEl = null;
 let entryCount = 0;
 let restartTimer = null;
-let lastFinalText = '';
-let lastOriginalEntryId = null;
-let lastTranslatedEntryId = null;
 
 // ---- Glossary (terms that should never be translated) ----
 const glossInput = document.getElementById('glossInput');
@@ -375,10 +372,8 @@ function buildRecognition(){
     if(listening){
       // Browser stops recognition after pauses/timeouts even in continuous mode.
       // Restart immediately and silently so the person never has to click again.
-      // Whatever comes next is a fresh utterance, not a continuation of the last one.
-      lastFinalText = '';
-      lastOriginalEntryId = null;
-      lastTranslatedEntryId = null;
+      // A real pause happened, so commit whatever sentence was still settling.
+      flushPending();
       clearTimeout(restartTimer);
       restartTimer = setTimeout(() => {
         if(!listening) return;
@@ -400,24 +395,7 @@ function buildRecognition(){
       const text = result[0].transcript.trim();
       if(result.isFinal){
         if(text.length > 0){
-          if(isContinuation(lastFinalText, text)){
-            // Android sometimes re-fires the SAME utterance, just grown longer.
-            // Update the existing line in place and translate only the new words.
-            const prevWordCount = wordsOf(lastFinalText).length;
-            const diffText = wordsOf(text).slice(prevWordCount).join(' ');
-            updateOriginalEntry(lastOriginalEntryId, text);
-            lastFinalText = text;
-            if(diffText){
-              enqueueTranslation(diffText, lastTranslatedEntryId, true);
-            }
-          } else {
-            const oId = addOriginalEntry(text);
-            const pendingId = addTranslatedPending(text);
-            lastFinalText = text;
-            lastOriginalEntryId = oId;
-            lastTranslatedEntryId = pendingId;
-            enqueueTranslation(text, pendingId, false);
-          }
+          handleFinalChunk(text);
         }
         clearInterim();
       } else {
@@ -432,19 +410,42 @@ function buildRecognition(){
   return rec;
 }
 
-function wordsOf(s){
-  return s.trim().split(/\s+/).filter(Boolean);
+// ---- Settle logic: Android keeps revising the "final" result for ~1-2s.
+// We wait for it to stop changing before translating, instead of reacting to every flicker. ----
+const SETTLE_DELAY_MS = 900;     // how long the text must stay unchanged before we translate it
+const SAME_UTTERANCE_GAP_MS = 2500; // if a new "final" arrives within this gap, treat it as a revision, not a new sentence
+
+let settleTimer = null;
+let pendingOriginalId = null;
+let pendingTranslatedId = null;
+let pendingRawText = '';
+let lastFinalAt = 0;
+
+function handleFinalChunk(text){
+  const now = Date.now();
+  const isRevision = pendingOriginalId && (now - lastFinalAt) < SAME_UTTERANCE_GAP_MS;
+
+  if(isRevision){
+    updateOriginalEntry(pendingOriginalId, text);
+  } else {
+    flushPending(); // commit whatever was pending immediately, a new sentence has begun
+    pendingOriginalId = addOriginalEntry(text);
+    pendingTranslatedId = addTranslatedPending(text);
+  }
+  pendingRawText = text;
+  lastFinalAt = now;
+  clearTimeout(settleTimer);
+  settleTimer = setTimeout(flushPending, SETTLE_DELAY_MS);
 }
 
-function isContinuation(prevText, newText){
-  if(!prevText) return false;
-  const prevWords = wordsOf(prevText.toLowerCase());
-  const newWords = wordsOf(newText.toLowerCase());
-  if(newWords.length <= prevWords.length) return false;
-  for(let i = 0; i < prevWords.length; i++){
-    if(prevWords[i] !== newWords[i]) return false;
+function flushPending(){
+  clearTimeout(settleTimer);
+  if(pendingOriginalId && pendingTranslatedId && pendingRawText){
+    enqueueTranslation(pendingRawText, pendingTranslatedId);
   }
-  return true;
+  pendingOriginalId = null;
+  pendingTranslatedId = null;
+  pendingRawText = '';
 }
 
 function updateOriginalEntry(id, text){
@@ -500,12 +501,12 @@ function escapeHtml(str){
   return div.innerHTML;
 }
 
-// ---- Translation queue (keeps order; supports appending diff-text to an existing line) ----
+// ---- Translation queue (keeps display order across async calls) ----
 let translationQueue = [];
 let isProcessingQueue = false;
 
-function enqueueTranslation(original, targetId, isAppend){
-  translationQueue.push({ original, targetId, isAppend: !!isAppend });
+function enqueueTranslation(original, targetId){
+  translationQueue.push({ original, targetId });
   processQueue();
 }
 
@@ -514,7 +515,7 @@ async function processQueue(){
   isProcessingQueue = true;
   while(translationQueue.length > 0){
     const job = translationQueue.shift();
-    await translateOne(job.original, job.targetId, job.isAppend);
+    await translateOne(job.original, job.targetId);
   }
   isProcessingQueue = false;
 }
@@ -523,7 +524,7 @@ function escapeRegExp(str){
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-async function translateOne(original, targetId, isAppend){
+async function translateOne(original, targetId){
   setApiBadge(translationQueue.length > 0 ? `navbatda (${translationQueue.length}) …` : 'tarjima qilinmoqda…');
 
   // Protect glossary terms: swap them for plain tokens the translator won't touch, then restore after.
@@ -544,7 +545,7 @@ async function translateOne(original, targetId, isAppend){
     const data = await response.json();
     let translated = (data && data[0]) ? data[0].map(seg => seg[0]).join('') : '';
     translated = translated.trim();
-    if(!translated){ translated = isAppend ? '' : '(tarjima topilmadi)'; }
+    if(!translated){ translated = '(tarjima topilmadi)'; }
 
     placeholders.forEach(p => {
       const re = new RegExp(p.token, 'gi');
@@ -553,20 +554,14 @@ async function translateOne(original, targetId, isAppend){
 
     const el = document.getElementById(targetId);
     if(el){
-      const p = el.querySelector('p');
       el.classList.remove('pending');
-      if(isAppend && translated){
-        const current = (p.textContent === 'tarjima qilinmoqda…') ? '' : p.textContent;
-        p.textContent = current ? (current + ' ' + translated) : translated;
-      } else if(!isAppend){
-        p.textContent = translated;
-      }
+      el.querySelector('p').textContent = translated;
       translatedPane.scrollTop = translatedPane.scrollHeight;
     }
     setApiBadge(translationQueue.length > 0 ? `navbatda (${translationQueue.length}) …` : 'tayyor', translationQueue.length > 0 ? '' : 'on');
   } catch(err){
     const el = document.getElementById(targetId);
-    if(el && !isAppend){
+    if(el){
       el.classList.remove('pending');
       el.querySelector('p').textContent = '(tarjima xatosi — qaytadan urinib ko\'ring)';
     }
@@ -577,9 +572,10 @@ async function translateOne(original, targetId, isAppend){
 function startListening(){
   recognition = buildRecognition();
   listening = true;
-  lastFinalText = '';
-  lastOriginalEntryId = null;
-  lastTranslatedEntryId = null;
+  clearTimeout(settleTimer);
+  pendingOriginalId = null;
+  pendingTranslatedId = null;
+  pendingRawText = '';
   toggleBtn.classList.add('recording');
   toggleLabel.textContent = 'Tinglashni to\'xtatish';
   try{
@@ -597,6 +593,7 @@ function stopListening(){
   toggleBtn.classList.remove('recording');
   toggleLabel.textContent = 'Tinglashni boshlash';
   clearInterim();
+  flushPending(); // translate whatever sentence was still settling
   if(recognition){
     try{ recognition.stop(); }catch(err){}
   }
@@ -621,9 +618,10 @@ clearBtn.addEventListener('click', () => {
   translatedPane.innerHTML = '<h2>O\'zbekcha tarjima</h2><div class="empty-hint" id="translatedHint">Tarjima shu yerda ko\'rinadi.</div>';
   entryCount = 0;
   translationQueue = [];
-  lastFinalText = '';
-  lastOriginalEntryId = null;
-  lastTranslatedEntryId = null;
+  clearTimeout(settleTimer);
+  pendingOriginalId = null;
+  pendingTranslatedId = null;
+  pendingRawText = '';
 });
 
 function buildTranscriptText(){
