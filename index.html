@@ -502,6 +502,12 @@ function escapeRegExp(str){
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+function getSourceLangCode(){
+  // Map the recognition language (e.g. "en-US") to the 2-letter code Google Translate expects.
+  const map = { 'en-US': 'en', 'ru-RU': 'ru', 'uz-UZ': 'uz', 'tr-TR': 'tr', 'ko-KR': 'ko' };
+  return map[langSelect.value] || 'auto';
+}
+
 async function translateOne(original, targetId){
   setApiBadge(translationQueue.length > 0 ? `navbatda (${translationQueue.length}) …` : 'tarjima qilinmoqda…');
 
@@ -518,7 +524,8 @@ async function translateOne(original, targetId){
   });
 
   try{
-    const url = 'https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=uz&dt=t&q=' + encodeURIComponent(textToSend);
+    const sourceLang = getSourceLangCode();
+    const url = 'https://translate.googleapis.com/translate_a/single?client=gtx&sl=' + sourceLang + '&tl=uz&dt=t&q=' + encodeURIComponent(textToSend);
     const response = await fetch(url);
     const data = await response.json();
     let translated = (data && data[0]) ? data[0].map(seg => seg[0]).join('') : '';
