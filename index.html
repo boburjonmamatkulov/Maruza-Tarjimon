@@ -212,6 +212,19 @@
     <button id="downloadBtn">.txt sifatida yuklash</button>
   </div>
 
+  <details class="glossary-box" id="dgBox" open>
+    <summary>Professional ovoz tanish (Deepgram) — ixtiyoriy, tavsiya etiladi</summary>
+    <div class="gloss-sub">
+      Bepul Deepgram kaliti qo'shsangiz, ingliz/rus/turk/koreys tilidagi ma'ruzalar uchun ovoz tanish sezilarli ishonchli bo'ladi (uzilish, so'z tushib qolishi kamayadi). Kalit kiritilmasa, sayt avvalgidek brauzerning bepul tizimida ishlaydi. <b>O'zbek tilida</b> baribir brauzer tizimi ishlatiladi (Deepgram o'zbekchani qo'llamaydi).<br>
+      Kalit olish: <b>console.deepgram.com</b> saytida bepul ro'yxatdan o'ting (kredit karta kerak emas, $200 bepul beriladi) → "API Keys" → "Create a New API Key" → kalitni nusxalab shu yerga joylashtiring.
+    </div>
+    <div class="gloss-input-row">
+      <input type="password" id="dgKeyInput" placeholder="Deepgram API kalitingiz" />
+      <button id="dgSaveBtn">Saqlash</button>
+    </div>
+    <div class="gloss-sub" id="dgStatus" style="margin-top:8px; margin-bottom:0;"></div>
+  </details>
+
   <details class="glossary-box">
     <summary>Maxsus atamalar ro'yxati (tarjima qilinmasin)</summary>
     <div class="gloss-sub">Ism, familiya, formula yoki maxsus terminlarni qo'shing — tarjima dasturi ularni o'zgartirmaydi, originalidagicha qoldiradi. (Masalan: Karimov, E=mc², blockchain)</div>
@@ -227,7 +240,7 @@
     Agar shu oynada mikrofon ishlamasa — sahifani <b>.html</b> fayl sifatida yuklab oling va uni to'g'ridan-to'g'ri Chrome'da oching, ruxsat alohida sahifada to'liq beriladi.
     Aralash tilli ma'ruzalarda, ma'ruzachi tilni almashtirganda, yuqoridan tegishli tilni tanlab qo'ying — brauzer bir vaqtning o'zida faqat bitta tilni tinglay oladi.
     Atrofdagi shovqin yoki boshqa o'quvchilarning ovozini butunlay "eshitmaydigan" qilib bo'lmaydi — buning uchun maxsus mikrofon kerak. Telefonni professorga imkon qadar yaqin qo'yish eng samarali yo'l.
-    <div style="margin-top:10px; opacity:0.6;">Versiya: 2026-06-22-r5 (takrorlanishni bostirish kuchaytirilgan)</div>
+    <div style="margin-top:10px; opacity:0.6;">Versiya: 2026-06-22-r6 (Deepgram professional rejimi qo'shildi)</div>
   </div>
 
 </div>
@@ -298,6 +311,37 @@ glossChips.addEventListener('click', (e) => {
 });
 loadGlossary();
 
+// ---- Deepgram API key settings ----
+const dgKeyInput = document.getElementById('dgKeyInput');
+const dgSaveBtn = document.getElementById('dgSaveBtn');
+const dgStatus = document.getElementById('dgStatus');
+
+function refreshDgStatus(){
+  const key = (function(){ try{ return (localStorage.getItem('deepgramApiKey') || '').trim(); }catch(e){ return ''; } })();
+  if(key){
+    dgStatus.innerHTML = '✅ Kalit saqlangan — ingliz/rus/turk/koreys tilida professional ovoz tanish faol bo\'ladi.';
+  } else {
+    dgStatus.innerHTML = '⚪ Kalit kiritilmagan — hozircha brauzerning bepul tizimi ishlatiladi.';
+  }
+}
+
+try{
+  const savedKey = localStorage.getItem('deepgramApiKey');
+  if(savedKey) dgKeyInput.value = savedKey;
+}catch(e){}
+refreshDgStatus();
+
+dgSaveBtn.addEventListener('click', () => {
+  const val = dgKeyInput.value.trim();
+  try{
+    if(val){ localStorage.setItem('deepgramApiKey', val); }
+    else { localStorage.removeItem('deepgramApiKey'); }
+  }catch(e){}
+  refreshDgStatus();
+  dgSaveBtn.textContent = 'Saqlandi ✓';
+  setTimeout(() => dgSaveBtn.textContent = 'Saqlash', 1500);
+});
+
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 
 function timeNow(){
@@ -333,9 +377,7 @@ function stopMeter(){
 }
 
 if(!SpeechRecognition){
-  setMicBadge('brauzer qo\'llamaydi', 'err');
-  toggleBtn.disabled = true;
-  toggleLabel.textContent = 'Bu brauzerda mavjud emas';
+  setMicBadge('brauzer qo\'llamaydi (Deepgram kalit kiritsangiz ishlaydi)');
 }
 
 function buildRecognition(){
@@ -610,7 +652,7 @@ async function translateOne(original, targetId){
 let periodicRestartTimer = null;
 const PERIODIC_RESTART_MS = 12000; // force a fresh recognition session every 12s even without a natural pause
 
-function startListening(){
+function startBrowserListening(){
   recognition = buildRecognition();
   listening = true;
   clearTimeout(settleTimer);
@@ -638,7 +680,7 @@ function startListening(){
   }
 }
 
-function stopListening(){
+function stopBrowserListening(){
   listening = false;
   clearInterval(periodicRestartTimer);
   toggleBtn.classList.remove('recording');
@@ -647,6 +689,146 @@ function stopListening(){
   flushPending(); // translate whatever sentence was still settling
   if(recognition){
     try{ recognition.stop(); }catch(err){}
+  }
+}
+
+// ---- Deepgram path: continuous mic streaming over WebSocket — no stop/start gaps at all. ----
+let dgSocket = null;
+let dgMediaStream = null;
+let dgMediaRecorder = null;
+let dgReconnectTimer = null;
+
+function getDeepgramKey(){
+  try{ return (localStorage.getItem('deepgramApiKey') || '').trim(); }catch(e){ return ''; }
+}
+function getDeepgramLangCode(){
+  const map = { 'en-US': 'en', 'ru-RU': 'ru', 'tr-TR': 'tr', 'ko-KR': 'ko' };
+  return map[langSelect.value] || null; // null means: not supported by Deepgram (e.g. uz-UZ)
+}
+function shouldUseDeepgram(){
+  return !!getDeepgramKey() && !!getDeepgramLangCode();
+}
+
+async function startDeepgramListening(){
+  listening = true;
+  toggleBtn.classList.add('recording');
+  toggleLabel.textContent = 'Tinglashni to\'xtatish';
+  clearTimeout(settleTimer);
+  pendingEntryId = null;
+  pendingRawText = '';
+  lastCommittedEntryId = null;
+  lastCommittedText = '';
+  setMicBadge('ulanmoqda…');
+  try{
+    dgMediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch(err){
+    setMicBadge('ruxsat berilmadi', 'err');
+    listening = false;
+    toggleBtn.classList.remove('recording');
+    toggleLabel.textContent = 'Tinglashni boshlash';
+    return;
+  }
+  connectDeepgramSocket();
+}
+
+function connectDeepgramSocket(){
+  const apiKey = getDeepgramKey();
+  const lang = getDeepgramLangCode();
+  const url = `wss://api.deepgram.com/v1/listen?model=nova-3&language=${lang}&punctuate=true&smart_format=true&interim_results=true&endpointing=500`;
+
+  try{
+    dgSocket = new WebSocket(url, ['token', apiKey]);
+  } catch(e){
+    setMicBadge('ulanish xatosi', 'err');
+    return;
+  }
+
+  dgSocket.onopen = () => {
+    setMicBadge('tinglanmoqda (Deepgram)', 'on');
+    startMeter();
+    try{
+      dgMediaRecorder = new MediaRecorder(dgMediaStream, { mimeType: 'audio/webm;codecs=opus' });
+    }catch(e){
+      dgMediaRecorder = new MediaRecorder(dgMediaStream);
+    }
+    dgMediaRecorder.ondataavailable = (e) => {
+      if(e.data && e.data.size > 0 && dgSocket && dgSocket.readyState === WebSocket.OPEN){
+        dgSocket.send(e.data);
+      }
+    };
+    dgMediaRecorder.start(250); // single continuous recording session, chunked every 250ms
+  };
+
+  dgSocket.onmessage = (msg) => {
+    try{
+      const data = JSON.parse(msg.data);
+      const alt = data.channel && data.channel.alternatives && data.channel.alternatives[0];
+      if(alt){
+        const transcript = (alt.transcript || '').trim();
+        if(transcript){
+          if(data.is_final){
+            handleFinalChunk(transcript);
+          } else {
+            showInterim(transcript);
+          }
+        }
+      }
+    }catch(e){ /* control/keepalive messages aren't JSON transcripts — ignore */ }
+  };
+
+  dgSocket.onerror = () => {
+    setMicBadge('ulanish xatosi', 'err');
+  };
+
+  dgSocket.onclose = () => {
+    stopMeter();
+    if(listening){
+      setMicBadge('qayta ulanmoqda…', 'err');
+      clearTimeout(dgReconnectTimer);
+      dgReconnectTimer = setTimeout(() => { if(listening) connectDeepgramSocket(); }, 1000);
+    } else {
+      setMicBadge('to\'xtatildi');
+    }
+  };
+}
+
+function stopDeepgramListening(){
+  listening = false;
+  toggleBtn.classList.remove('recording');
+  toggleLabel.textContent = 'Tinglashni boshlash';
+  clearInterim();
+  flushPending();
+  clearTimeout(dgReconnectTimer);
+  if(dgMediaRecorder && dgMediaRecorder.state !== 'inactive'){
+    try{ dgMediaRecorder.stop(); }catch(e){}
+  }
+  if(dgSocket){
+    try{ dgSocket.close(); }catch(e){}
+  }
+  if(dgMediaStream){
+    dgMediaStream.getTracks().forEach(t => t.stop());
+  }
+  dgMediaStream = null;
+  dgMediaRecorder = null;
+  dgSocket = null;
+}
+
+// ---- Dispatcher: picks Deepgram (reliable, needs a free API key) or the browser's
+// built-in engine (free, no key, but has the gap/restart issue) based on language + key. ----
+function startListening(){
+  if(shouldUseDeepgram()){
+    startDeepgramListening();
+  } else if(SpeechRecognition){
+    startBrowserListening();
+  } else {
+    setMicBadge('hech qaysi tizim mavjud emas — Deepgram kalit kiriting', 'err');
+  }
+}
+function stopListening(){
+  if(dgSocket || dgMediaStream || dgMediaRecorder){
+    stopDeepgramListening();
+  } else {
+    stopBrowserListening();
   }
 }
 
