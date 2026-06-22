@@ -227,6 +227,7 @@
     Agar shu oynada mikrofon ishlamasa — sahifani <b>.html</b> fayl sifatida yuklab oling va uni to'g'ridan-to'g'ri Chrome'da oching, ruxsat alohida sahifada to'liq beriladi.
     Aralash tilli ma'ruzalarda, ma'ruzachi tilni almashtirganda, yuqoridan tegishli tilni tanlab qo'ying — brauzer bir vaqtning o'zida faqat bitta tilni tinglay oladi.
     Atrofdagi shovqin yoki boshqa o'quvchilarning ovozini butunlay "eshitmaydigan" qilib bo'lmaydi — buning uchun maxsus mikrofon kerak. Telefonni professorga imkon qadar yaqin qo'yish eng samarali yo'l.
+    <div style="margin-top:10px; opacity:0.6;">Versiya: 2026-06-22-r5 (takrorlanishni bostirish kuchaytirilgan)</div>
   </div>
 
 </div>
@@ -408,7 +409,7 @@ function buildRecognition(){
 // We wait for it to stop changing before translating, instead of reacting to every flicker. ----
 const SETTLE_DELAY_MS = 900;        // how long the text must stay unchanged before we translate it
 const SAME_UTTERANCE_GAP_MS = 2500; // if a new "final" arrives within this gap, treat it as a revision, not a new sentence
-const ECHO_WINDOW_MS = 30000;       // Android sometimes re-emits the same sentence up to ~30s later — catch that too
+const ECHO_WINDOW_MS = 45000;       // Android sometimes re-emits the same sentence up to ~45s later — catch that too
 
 let settleTimer = null;
 let pendingEntryId = null;
@@ -606,6 +607,9 @@ async function translateOne(original, targetId){
   }
 }
 
+let periodicRestartTimer = null;
+const PERIODIC_RESTART_MS = 12000; // force a fresh recognition session every 12s even without a natural pause
+
 function startListening(){
   recognition = buildRecognition();
   listening = true;
@@ -618,6 +622,14 @@ function startListening(){
   toggleLabel.textContent = 'Tinglashni to\'xtatish';
   try{
     recognition.start();
+    clearInterval(periodicRestartTimer);
+    periodicRestartTimer = setInterval(() => {
+      // Dense, pause-free speech can make recognition drift behind real time and
+      // silently drop whole chunks. Forcing a restart regularly keeps the drift bounded.
+      if(listening && recognition){
+        try{ recognition.stop(); }catch(e){} // onend will flush + auto-restart
+      }
+    }, PERIODIC_RESTART_MS);
   }catch(err){
     setMicBadge('ishga tushmadi', 'err');
     listening = false;
@@ -628,6 +640,7 @@ function startListening(){
 
 function stopListening(){
   listening = false;
+  clearInterval(periodicRestartTimer);
   toggleBtn.classList.remove('recording');
   toggleLabel.textContent = 'Tinglashni boshlash';
   clearInterim();
