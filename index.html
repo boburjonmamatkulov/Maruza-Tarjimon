@@ -240,7 +240,7 @@
     Agar shu oynada mikrofon ishlamasa — sahifani <b>.html</b> fayl sifatida yuklab oling va uni to'g'ridan-to'g'ri Chrome'da oching, ruxsat alohida sahifada to'liq beriladi.
     Aralash tilli ma'ruzalarda, ma'ruzachi tilni almashtirganda, yuqoridan tegishli tilni tanlab qo'ying — brauzer bir vaqtning o'zida faqat bitta tilni tinglay oladi.
     Atrofdagi shovqin yoki boshqa o'quvchilarning ovozini butunlay "eshitmaydigan" qilib bo'lmaydi — buning uchun maxsus mikrofon kerak. Telefonni professorga imkon qadar yaqin qo'yish eng samarali yo'l.
-    <div style="margin-top:10px; opacity:0.6;">Versiya: 2026-06-22-r6 (Deepgram professional rejimi qo'shildi)</div>
+    <div style="margin-top:10px; opacity:0.6;">Versiya: 2026-09-25-r7 (Deepgram uchun jumlalarni qo'shib borish tuzatildi — oxirgi so'zlar tushib qolmaydi)</div>
   </div>
 
 </div>
@@ -511,6 +511,39 @@ function handleFinalChunk(text){
   settleTimer = setTimeout(flushPending, SETTLE_DELAY_MS);
 }
 
+// ---- Deepgram final-chunk handler: unlike the browser engine, Deepgram never re-sends
+// a cumulative/corrected version of the same "final" — each final is a fresh, separate
+// piece of speech. So within one utterance we APPEND new finals onto the pending sentence
+// instead of replacing it (replacing was silently dropping the tail of sentences). ----
+function handleDeepgramFinalChunk(text){
+  clearInterim();
+  const now = Date.now();
+  const isSameUtterance = pendingEntryId && (now - lastFinalAt) < SAME_UTTERANCE_GAP_MS;
+
+  if(isSameUtterance){
+    pendingRawText = (pendingRawText + ' ' + text).replace(/\s+/g, ' ').trim();
+    updateOriginalEntry(pendingEntryId, pendingRawText);
+  } else {
+    flushPending(); // commit whatever was pending immediately, a new sentence has begun
+
+    const isDelayedEcho = lastCommittedEntryId && (now - lastCommittedAt) < ECHO_WINDOW_MS
+      && isDuplicateOrExtension(lastCommittedText, text);
+
+    if(isDelayedEcho){
+      pendingEntryId = lastCommittedEntryId;
+      pendingRawText = text;
+      updateOriginalEntry(pendingEntryId, pendingRawText);
+      markEntryPending(pendingEntryId);
+    } else {
+      pendingEntryId = addEntry(text);
+      pendingRawText = text;
+    }
+  }
+  lastFinalAt = now;
+  clearTimeout(settleTimer);
+  settleTimer = setTimeout(flushPending, SETTLE_DELAY_MS);
+}
+
 function flushPending(){
   clearTimeout(settleTimer);
   if(pendingEntryId && pendingRawText){
@@ -767,7 +800,7 @@ function connectDeepgramSocket(){
         const transcript = (alt.transcript || '').trim();
         if(transcript){
           if(data.is_final){
-            handleFinalChunk(transcript);
+            handleDeepgramFinalChunk(transcript);
           } else {
             showInterim(transcript);
           }
